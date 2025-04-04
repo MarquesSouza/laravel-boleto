@@ -5,12 +5,15 @@ namespace Eduardokum\LaravelBoleto\Boleto;
 use Exception;
 use Throwable;
 use Carbon\Carbon;
+use Illuminate\Support\Arr;
 use Illuminate\Support\Str;
 use chillerlan\QRCode\QRCode;
 use chillerlan\QRCode\QROptions;
 use Eduardokum\LaravelBoleto\Util;
 use chillerlan\QRCode\Data\QRMatrix;
+use Eduardokum\LaravelBoleto\Pessoa;
 use Eduardokum\LaravelBoleto\MagicTrait;
+use Eduardokum\LaravelBoleto\NotaFiscal;
 use chillerlan\QRCode\Output\QROutputInterface;
 use Eduardokum\LaravelBoleto\Boleto\Render\Pdf;
 use Eduardokum\LaravelBoleto\Boleto\Render\Html;
@@ -19,6 +22,7 @@ use Eduardokum\LaravelBoleto\Contracts\Boleto\Boleto;
 use Eduardokum\LaravelBoleto\Exception\ValidationException;
 use Eduardokum\LaravelBoleto\Contracts\Pessoa as PessoaContract;
 use Eduardokum\LaravelBoleto\Contracts\Boleto\Boleto as BoletoContract;
+use Eduardokum\LaravelBoleto\Contracts\NotaFiscal as NotaFiscalContract;
 
 /**
  * Class AbstractBoleto
@@ -102,6 +106,7 @@ abstract class AbstractBoleto implements BoletoContract
      * @var float
      */
     public $multaApos = 0;
+
     /**
      * Valor para mora juros
      *
@@ -110,7 +115,7 @@ abstract class AbstractBoleto implements BoletoContract
     public $juros = 0;
 
     /**
-     * Dias apos vencimento do juros
+     * Dias após vencimento do juros
      *
      * @var int
      */
@@ -122,6 +127,12 @@ abstract class AbstractBoleto implements BoletoContract
      * @var int
      */
     public $diasProtesto = 0;
+
+    /**
+     * Tipo de prostesto se dias úteis, dias corridos, não protestar
+     * @var int
+     */
+    public $tipoProtesto = 0;
 
     /**
      * Dias para baixa automática
@@ -292,6 +303,13 @@ abstract class AbstractBoleto implements BoletoContract
     public $pagador;
 
     /**
+     * Notas fiscais vinculadas ao Boleto
+     *
+     * @var NotaFiscalContract[]
+     */
+    public $notasFiscais = [];
+
+    /**
      * Entidade sacadora avalista
      *
      * @var PessoaContract
@@ -301,7 +319,7 @@ abstract class AbstractBoleto implements BoletoContract
     /**
      * Array com as linhas do demonstrativo (descrição do pagamento)
      *
-     * @var array
+     * @var array|null
      */
     protected $descricaoDemonstrativo;
 
@@ -315,14 +333,14 @@ abstract class AbstractBoleto implements BoletoContract
     /**
      * Array com as linhas de instruções
      *
-     * @var array
+     * @var array|null
      */
     protected $instrucoes = ['Pagar até a data do vencimento.'];
 
     /**
      * Array com as linhas de instruções de impressão
      *
-     * @var array
+     * @var array|null
      */
     protected $instrucoes_impressao = [];
 
@@ -499,7 +517,6 @@ abstract class AbstractBoleto implements BoletoContract
     /**
      * @param $id
      * @return AbstractBoleto
-     * @throws ValidationException
      */
     public function setID($id)
     {
@@ -613,6 +630,7 @@ abstract class AbstractBoleto implements BoletoContract
     public function setBeneficiario($beneficiario)
     {
         Util::addPessoa($this->beneficiario, $beneficiario);
+        $this->beneficiario->setTipo(Pessoa::TIPO_BENEFICIARIO);
 
         return $this;
     }
@@ -625,6 +643,58 @@ abstract class AbstractBoleto implements BoletoContract
     public function getBeneficiario()
     {
         return $this->beneficiario;
+    }
+
+    /**
+     * Add notas fiscais
+     *
+     * @param $notasFiscais
+     *
+     * @return AbstractBoleto
+     * @throws ValidationException
+     */
+    public function setNotasFiscais($notasFiscais)
+    {
+        $notasFiscais = Arr::get($notasFiscais, '0') ? $notasFiscais : [$notasFiscais];
+        foreach ($notasFiscais as $notaFiscal) {
+            Util::addNotaFiscal($this->notasFiscais, $notaFiscal);
+        }
+
+        return $this;
+    }
+
+    /**
+     * Retorna as notas fiscais
+     *
+     * @return NotaFiscalContract[]
+     */
+    public function getNotasFiscais()
+    {
+        if (count($this->notasFiscais) == 0 && $this->chaveNfe) {
+            return [
+                new NotaFiscal([
+                    'chave' => $this->chaveNfe,
+                ]),
+            ];
+        }
+
+        return $this->notasFiscais;
+    }
+
+    /**
+     * Retorna a notas fiscal
+     *
+     * @return NotaFiscalContract
+     */
+    public function getNotaFiscal($indice)
+    {
+        if ($indice == 0 && count($this->notasFiscais) == 0 && $this->chaveNfe) {
+            return new NotaFiscal([
+                'chave' => $this->chaveNfe,
+            ]);
+        }
+
+        return optional(Arr::get($this->notasFiscais, $indice));
     }
 
     /**
@@ -883,7 +953,7 @@ abstract class AbstractBoleto implements BoletoContract
     /**
      * Retorna o campo Número do documento
      *
-     * @return string
+     * @return int
      */
     public function getNumeroDocumento()
     {
@@ -931,7 +1001,7 @@ abstract class AbstractBoleto implements BoletoContract
     /**
      * Retorna o número definido pelo cliente para controle da remessa
      *
-     * @return int
+     * @return string
      */
     public function getNumeroControle()
     {
@@ -990,6 +1060,10 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function getChaveNfe()
     {
+        if (count($this->notasFiscais) > 0) {
+            return Arr::first($this->getNotasFiscais())->getChave();
+        }
+
         if (strlen($this->chaveNfe) != 44) {
             return null;
         }
@@ -1034,7 +1108,7 @@ abstract class AbstractBoleto implements BoletoContract
         if (count($this->getInstrucoes()) > 8) {
             throw new ValidationException('Atingido o máximo de 5 instruções.');
         }
-        array_push($this->instrucoes, $instrucao);
+        $this->instrucoes[] = $instrucao;
 
         return $this;
     }
@@ -1064,7 +1138,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function getInstrucoes()
     {
-        return array_slice((array) $this->instrucoes + [null, null, null, null, null, null, null, null], 0, 8);
+        return array_slice(((array) $this->instrucoes) + [null, null, null, null, null, null, null, null], 0, 8);
     }
 
     /**
@@ -1093,7 +1167,7 @@ abstract class AbstractBoleto implements BoletoContract
     public function getInstrucoesImpressao()
     {
         if (! empty($this->instrucoes_impressao)) {
-            return array_slice((array) $this->instrucoes_impressao + [null, null, null, null, null], 0, 5);
+            return array_slice(((array) $this->instrucoes_impressao) + [null, null, null, null, null], 0, 5);
         } else {
             return [];
         }
@@ -1112,7 +1186,7 @@ abstract class AbstractBoleto implements BoletoContract
         if (count($this->getDescricaoDemonstrativo()) > 5) {
             throw new ValidationException('Atingido o máximo de 5 demonstrativos.');
         }
-        array_push($this->descricaoDemonstrativo, $descricaoDemonstrativo);
+        $this->descricaoDemonstrativo[] = $descricaoDemonstrativo;
 
         return $this;
     }
@@ -1142,7 +1216,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function getDescricaoDemonstrativo()
     {
-        return array_slice((array) $this->descricaoDemonstrativo + [null, null, null, null, null], 0, 5);
+        return array_slice(((array) $this->descricaoDemonstrativo) + [null, null, null, null, null], 0, 5);
     }
 
     /**
@@ -1204,6 +1278,7 @@ abstract class AbstractBoleto implements BoletoContract
     public function setPagador($pagador)
     {
         Util::addPessoa($this->pagador, $pagador);
+        $this->pagador->setTipo(Pessoa::TIPO_PAGADOR);
 
         return $this;
     }
@@ -1229,6 +1304,7 @@ abstract class AbstractBoleto implements BoletoContract
     public function setSacadorAvalista($sacadorAvalista)
     {
         Util::addPessoa($this->sacadorAvalista, $sacadorAvalista);
+        $this->sacadorAvalista->setTipo(Pessoa::TIPO_SACADOR);
 
         return $this;
     }
@@ -1300,7 +1376,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function setMulta($multa)
     {
-        $this->multa = (float) ($multa > 0.00 ? $multa : 0.00);
+        $this->multa = (float) (max($multa, 0.00));
 
         return $this;
     }
@@ -1324,7 +1400,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function setJuros($juros)
     {
-        $this->juros = (float) ($juros > 0.00 ? $juros : 0.00);
+        $this->juros = max($juros, 0.00);
 
         return $this;
     }
@@ -1362,8 +1438,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function setJurosApos($jurosApos)
     {
-        $jurosApos = (int) $jurosApos;
-        $this->jurosApos = $jurosApos > 0 ? $jurosApos : 0;
+        $this->jurosApos = max((int) $jurosApos, 0);
 
         return $this;
     }
@@ -1375,7 +1450,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function getJurosApos()
     {
-        return $this->jurosApos ? $this->jurosApos : false;
+        return $this->jurosApos ?: false;
     }
 
     /**
@@ -1387,8 +1462,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function setMultaApos($multaApos)
     {
-        $multaApos = (int)$multaApos;
-        $this->multaApos = $multaApos > 0 ? $multaApos : 0;
+        $this->multaApos = max((int) $multaApos, 0);
 
         return $this;
     }
@@ -1404,7 +1478,7 @@ abstract class AbstractBoleto implements BoletoContract
     }
 
     /**
-     * Seta dias para protesto
+     * Seta os dias para protesto
      *
      * @param int $diasProtesto
      *
@@ -1413,10 +1487,9 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function setDiasProtesto($diasProtesto)
     {
-        $diasProtesto = (int) $diasProtesto;
-        $this->diasProtesto = $diasProtesto > 0 ? $diasProtesto : 0;
+        $this->diasProtesto = max((int) $diasProtesto, 0);
 
-        if (! empty($diasProtesto) && $this->getDiasBaixaAutomatica() > 0) {
+        if (! empty($this->diasProtesto) && $this->getDiasBaixaAutomatica() > 0) {
             throw new ValidationException('Você deve usar dias de protesto ou dias de baixa, nunca os 2');
         }
 
@@ -1436,6 +1509,38 @@ abstract class AbstractBoleto implements BoletoContract
     }
 
     /**
+     * Seta dias para protesto
+     * 0 = Não protestar, 1 = Dias corridos, 2 = Dias úteis, 3 = Negativar dias corridos, 4 = Não negativar
+     * @param int $tipoProtesto
+     *
+     * @return AbstractBoleto
+     * @throws Exception
+     */
+    public function setTipoProtesto($tipoProtesto)
+    {
+        $tipoProtesto = (int) $tipoProtesto;
+        $this->tipoProtesto = $tipoProtesto > 0 ? $tipoProtesto : 0;
+
+        if (! empty($tipoProtesto) && $this->getDiasProtesto() == 0) {
+            throw new Exception('Você deve informar dias de protesto se informar tipo de protesto');
+        }
+
+        return $this;
+    }
+
+    /**
+     * Retorna os diasProtesto
+     *
+     * @param int $default
+     *
+     * @return int
+     */
+    public function getTipoProtesto($default = 0)
+    {
+        return $this->tipoProtesto > 0 ? $this->tipoProtesto : $default;
+    }
+
+    /**
      * Seta os dias para baixa automática
      *
      * @param int $baixaAutomatica
@@ -1443,7 +1548,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function setDiasBaixaAutomatica($baixaAutomatica)
     {
-        $exception = sprintf('O banco %s não suporta baixa automática, pode usar também: setDiasProtesto(%s)', basename(get_class($this)), $baixaAutomatica);
+        $exception = sprintf('O banco %s não suporta baixa automática, pode usar também', basename(get_class($this)));
         throw new ValidationException($exception);
     }
 
@@ -1456,7 +1561,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function getDiasBaixaAutomatica($default = 0)
     {
-        //Caso não tenha valor definido de dias pra protesto setar 60 dias como valor padrão para baixa automatica.
+        //Caso não tenha valor definido de dias para protesto setar 60 dias como valor padrão para baixa automática.
         //O valor padrão só será utilizado caso não haja nenhum valor definido para baixaAutomatica
         if (empty($this->getDiasProtesto())) {
             $default = (empty($default) ? 60 : $default);
@@ -1486,7 +1591,7 @@ abstract class AbstractBoleto implements BoletoContract
      */
     public function getLogo()
     {
-        return $this->logo ? $this->logo : 'http://dummyimage.com/300x70/f5/0.png&text=Sem+Logo';
+        return $this->logo ?: 'https://dummyimage.com/300x70/f5/0.png&text=Sem+Logo';
     }
 
     /**
@@ -2013,7 +2118,6 @@ abstract class AbstractBoleto implements BoletoContract
     /**
      * @param $id
      * @return string
-     * @throws ValidationException
      */
     protected function validateId($id)
     {
@@ -2031,11 +2135,11 @@ abstract class AbstractBoleto implements BoletoContract
                 throw new ValidationException('Informado tipo de chave de Pix porém não foi informado a chave');
             }
             if (! $this->getPixChaveTipo()) {
-                throw new ValidationException('Informado tipo de chave de Pix porém não foi informado a chave');
+                throw new ValidationException('Informado chave de Pix porém não foi informado o tipo de chave');
             }
-            if (! $this->getID()) {
-                throw new ValidationException('ID necessita ser informado para geração da cobrança');
-            }
+//            if (! $this->getID()) {
+//                throw new ValidationException('ID necessita ser informado para geração da cobrança');
+//            }
 
             switch ($this->getPixChaveTipo()) {
                 case self::TIPO_CHAVEPIX_CPF:

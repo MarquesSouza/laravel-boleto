@@ -15,10 +15,13 @@ interface Boleto
     const COD_BANCO_CRESOL = '133';
     const COD_BANCO_BTG = '208';
     const COD_BANCO_BRADESCO = '237';
+    const COD_BANCO_ABC = '246';
+    const COD_BANCO_GRAFENO = '274';
     const COD_BANCO_C6 = '336';
     const COD_BANCO_ITAU = '341';
     const COD_BANCO_HSBC = '399';
     const COD_BANCO_DELCRED = '435';
+    const COD_BANCO_BV = '655';
     const COD_BANCO_SICREDI = '748';
     const COD_BANCO_BANRISUL = '041';
     const COD_BANCO_BANCOOB = '756';
@@ -27,6 +30,7 @@ interface Boleto
     const COD_BANCO_FIBRA = '224';
     const COD_BANCO_RENDIMENTO = '633';
     const COD_BANCO_PINE = '643';
+    const COD_BANCO_DAYCOVAL = '707';
     const COD_BANCO_OURINVEST = '712';
     const STATUS_REGISTRO = 1;
     const STATUS_ALTERACAO = 2;
@@ -166,7 +170,7 @@ interface Boleto
      * @return mixed
      */
     public function getJurosApos();
-    
+
     /**
      * @return mixed
      */
@@ -178,6 +182,13 @@ interface Boleto
      * @return mixed
      */
     public function getDiasProtesto($default = 0);
+
+    /**
+     * @param int $default
+     *
+     * @return mixed
+     */
+    public function getTipoProtesto($default = 0);
 
     /**
      * @param int $default
